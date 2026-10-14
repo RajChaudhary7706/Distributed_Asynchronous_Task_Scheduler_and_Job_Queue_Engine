@@ -1,0 +1,15 @@
+{
+  "name": "@ats/worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/worker.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ats/config": "*",
+    "@ats/database": "*",
+    "@ats/queue": "*",
+    "@ats/shared": "*"
+  }
+}
