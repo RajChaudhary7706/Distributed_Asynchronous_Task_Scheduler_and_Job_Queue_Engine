@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// The lifecycle of a job. Legal transitions are enforced in src/job-state-machine.ts.
+enum JobState {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  DLQ
+}
+
+// One row per job: the CURRENT truth about what happened to it.
+model Job {
+  // Same value is used as the BullMQ job id (Phase 4), so one id works everywhere.
+  id           String    @id
+  // "pdf-export" | "email-send" | "video-transcode" (validated in the API, Phase 4).
+  // Kept as TEXT so adding a new job type never requires a migration.
+  type         String
+  payload      Json
+  state        JobState  @default(QUEUED)
+  // Number of times a worker has STARTED executing this job.
+  attemptCount Int       @default(0)
+  maxAttempts  Int
+  createdAt    DateTime  @default(now())
+  // Also serves as our optimistic-lock version (see transitionJob).
+  updatedAt    DateTime  @updatedAt
+  startedAt    DateTime?
+  completedAt  DateTime?
+  failedAt     DateTime?
+  error        String?
+
+  events       JobEvent[]
+
+  // "list jobs in state X, newest first" (operator dashboards, recovery sweeps)
+  @@index([state, createdAt])
+  // "list jobs of type X, newest first"
+  @@index([type, createdAt])
+  @@map("jobs")
+}
+
+// Append-only history: one row per state transition. Never updated, never deleted
+// (except when the parent job is deleted).
+model JobEvent {
+  id        Int       @id @default(autoincrement())
+  jobId     String
+  job       Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  fromState JobState? // null for the very first event (job creation)
+  toState   JobState
+  attempt   Int       // value of attemptCount after this transition
+  error     String?
+  workerId  String?
+  createdAt DateTime  @default(now())
+
+  @@index([jobId, createdAt])
+  @@map("job_events")
+}
