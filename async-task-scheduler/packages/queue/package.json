@@ -5,11 +5,13 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "queue:smoke": "tsx src/scripts/smoke.ts"
   },
   "dependencies": {
     "@ats/config": "*",
     "@ats/shared": "*",
-    "ioredis": "^6.0.0"
+    "bullmq": "^5.0.0",
+    "ioredis": "^5.0.0"
   }
 }

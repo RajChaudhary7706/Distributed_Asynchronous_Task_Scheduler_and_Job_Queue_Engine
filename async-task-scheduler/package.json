@@ -12,6 +12,11 @@
   "scripts": {
     "dev:api": "npm run dev -w @ats/api",
     "dev:worker": "npm run dev -w @ats/worker",
+    "db:generate": "npm run db:generate -w @ats/database",
+    "db:migrate": "npm run db:migrate -w @ats/database --",
+    "db:smoke": "npm run db:smoke -w @ats/database",
+    "queue:smoke": "npm run queue:smoke -w @ats/queue",
+    "db:studio": "npm run db:studio -w @ats/database --",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "infra:up": "docker compose up -d",
