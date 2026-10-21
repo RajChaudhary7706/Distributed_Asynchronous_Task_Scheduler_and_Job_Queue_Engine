@@ -20,7 +20,7 @@ enum JobState {
 model Job {
   // Same value is used as the BullMQ job id (Phase 4), so one id works everywhere.
   id           String    @id
-  // "pdf-export" | "email-send" | "video-transcode" (validated in the API, Phase 4).
+  // "pdf-export" | "email-send" | "video-transcode" (validated in the API).
   // Kept as TEXT so adding a new job type never requires a migration.
   type         String
   payload      Json
@@ -30,7 +30,10 @@ model Job {
   maxAttempts  Int
   createdAt    DateTime  @default(now())
   // Also serves as our optimistic-lock version (see transitionJob).
+  // Only state transitions may change it. Metadata writes use raw SQL (markJobEnqueued).
   updatedAt    DateTime  @updatedAt
+  // NULL until the job has been handed to Redis. The sweeper retries rows where it is still NULL.
+  enqueuedAt   DateTime?
   startedAt    DateTime?
   completedAt  DateTime?
   failedAt     DateTime?
@@ -38,10 +41,12 @@ model Job {
 
   events       JobEvent[]
 
-  // "list jobs in state X, newest first" (operator dashboards, recovery sweeps)
+  // "list jobs in state X, newest first" (dashboards, listings)
   @@index([state, createdAt])
   // "list jobs of type X, newest first"
   @@index([type, createdAt])
+  // "find QUEUED jobs that never reached Redis" (the sweeper)
+  @@index([state, enqueuedAt])
   @@map("jobs")
 }
 

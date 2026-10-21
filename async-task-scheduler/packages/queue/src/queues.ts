@@ -3,11 +3,14 @@ import type IORedis from "ioredis";
 import {
   DLQ_QUEUE_NAME,
   JOB_TYPES,
+  createLogger,
   getJobDefinition,
   type DlqJobData,
   type JobData,
   type JobType,
 } from "@ats/shared";
+
+const log = createLogger("queues");
 
 const HOUR = 3600; // BullMQ ages are in seconds
 const DAY = 24 * HOUR;
@@ -28,10 +31,14 @@ export type JobQueues = Record<JobType, Queue<JobData>>;
 export function createJobQueues(connection: IORedis): JobQueues {
   const queues = {} as JobQueues;
   for (const type of JOB_TYPES) {
-    queues[type] = new Queue<JobData>(getJobDefinition(type).queueName, {
+    const queue = new Queue<JobData>(getJobDefinition(type).queueName, {
       connection,
       defaultJobOptions: DEFAULT_JOB_OPTIONS,
     });
+    // A Node EventEmitter that emits 'error' with no listener THROWS and crashes the process.
+    // Without this, a Redis outage would kill the API.
+    queue.on("error", (err) => log.warn({ queue: queue.name, err: err.message }, "queue error"));
+    queues[type] = queue;
   }
   return queues;
 }
@@ -42,10 +49,12 @@ export function createJobQueues(connection: IORedis): JobQueues {
  * Do not create a Worker for this queue.
  */
 export function createDlqQueue(connection: IORedis): Queue<DlqJobData> {
-  return new Queue<DlqJobData>(DLQ_QUEUE_NAME, {
+  const queue = new Queue<DlqJobData>(DLQ_QUEUE_NAME, {
     connection,
     defaultJobOptions: { removeOnComplete: false, removeOnFail: false },
   });
+  queue.on("error", (err) => log.warn({ queue: queue.name, err: err.message }, "queue error"));
+  return queue;
 }
 
 export async function closeQueues(...queues: Array<{ close(): Promise<void> }>): Promise<void> {

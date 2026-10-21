@@ -23,7 +23,8 @@ export class StaleTransitionError extends Error {
 
 export interface CreateJobInput {
   type: string;
-  payload: Prisma.InputJsonValue;
+  /** Any JSON object. Shape validation is the API's job (zod, per job type). */
+  payload: Record<string, unknown>;
   maxAttempts: number;
   /** Optional: lets the caller choose the id. Defaults to "job_<uuid>". */
   id?: string;
@@ -35,13 +36,26 @@ export interface TransitionMeta {
   workerId?: string;
 }
 
+export interface ListJobsInput {
+  state?: JobState;
+  type?: string;
+  limit: number;
+  /** The `nextCursor` returned by the previous page. */
+  cursor?: string;
+}
+
+export interface JobPage {
+  items: Job[];
+  nextCursor: string | null;
+}
+
 /** Creates the job row (state = QUEUED) and its first event atomically. */
 export async function createJob(input: CreateJobInput): Promise<Job> {
   return prisma.job.create({
     data: {
       id: input.id ?? `job_${randomUUID()}`,
       type: input.type,
-      payload: input.payload,
+      payload: input.payload as Prisma.InputJsonObject,
       maxAttempts: input.maxAttempts,
       state: "QUEUED",
       events: { create: { fromState: null, toState: "QUEUED", attempt: 0 } },
@@ -58,6 +72,45 @@ export async function getJobEvents(jobId: string): Promise<JobEvent[]> {
     where: { jobId },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
+}
+
+/**
+ * Keyset (cursor) pagination, newest first.
+ * We fetch limit+1 rows: the extra row, if present, is where the next page starts.
+ */
+export async function listJobs(input: ListJobsInput): Promise<JobPage> {
+  const rows = await prisma.job.findMany({
+    where: { state: input.state, type: input.type },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: input.limit + 1,
+    ...(input.cursor ? { cursor: { id: input.cursor } } : {}),
+  });
+  const next = rows[input.limit];
+  return { items: rows.slice(0, input.limit), nextCursor: next ? next.id : null };
+}
+
+/** QUEUED jobs older than `olderThan` that were never confirmed to be in Redis. Oldest first. */
+export async function findUnenqueuedJobs(olderThan: Date, limit: number): Promise<Job[]> {
+  return prisma.job.findMany({
+    where: { state: "QUEUED", enqueuedAt: null, createdAt: { lt: olderThan } },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+}
+
+/**
+ * Records that Redis has this job. Idempotent (only the first call writes).
+ *
+ * Raw SQL on purpose: Prisma would bump `updatedAt`, which is our optimistic-lock
+ * version. A worker that read the row a moment ago would then fail its transition
+ * with StaleTransitionError even though nothing about the job's STATE changed.
+ */
+export async function markJobEnqueued(jobId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "jobs"
+    SET "enqueuedAt" = (NOW() AT TIME ZONE 'UTC')
+    WHERE "id" = ${jobId} AND "enqueuedAt" IS NULL
+  `;
 }
 
 /**
@@ -136,7 +189,8 @@ function buildTransition(
       // Keep error/failedAt/attemptCount as they are: that's the evidence for operators.
       return { data: { state: to }, attempt: current.attemptCount };
     case "QUEUED":
-      // Only reachable from DLQ (manual retry): start fresh.
+      // Only reachable from DLQ (manual retry): start fresh, and mark it as "not yet in Redis"
+      // so the sweeper will pick it up if the API crashes before enqueueing.
       return {
         data: {
           state: to,
@@ -145,6 +199,7 @@ function buildTransition(
           startedAt: null,
           failedAt: null,
           completedAt: null,
+          enqueuedAt: null,
         },
         attempt: 0,
       };
