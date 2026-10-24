@@ -4,6 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/worker.ts",
+    "dev:worker:pdf": "npm run dev:pdf -w @ats/worker",
+    "dev:worker:email": "npm run dev:email -w @ats/worker",
+    "dev:worker:video": "npm run dev:video -w @ats/worker",
+    "dev:pdf": "cross-env WORKER_QUEUE=pdf-export WORKER_ID=worker-pdf-01 tsx watch src/worker.ts",
+    "dev:email": "cross-env WORKER_QUEUE=email-send WORKER_ID=worker-email-01 tsx watch src/worker.ts",
+    "dev:video": "cross-env WORKER_QUEUE=video-transcode WORKER_ID=worker-video-01 tsx watch src/worker.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -11,5 +17,8 @@
     "@ats/database": "*",
     "@ats/queue": "*",
     "@ats/shared": "*"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
   }
 }

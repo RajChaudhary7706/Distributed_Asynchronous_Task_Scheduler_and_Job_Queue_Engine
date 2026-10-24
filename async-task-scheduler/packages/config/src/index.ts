@@ -22,6 +22,9 @@ const envSchema = z.object({
 
   API_PORT: z.coerce.number().int().positive().default(3000),
   WORKER_ID: z.string().min(1).default(`worker-${process.pid}`),
+  // "all", one job type, or a comma-separated list. Validated against the registry in the worker
+  // (this package cannot import @ats/shared without creating a dependency cycle).
+  WORKER_QUEUE: z.string().min(1).default("all"),
 
   DATABASE_URL: z.string().startsWith("postgres", "DATABASE_URL must be a postgres URL"),
   REDIS_URL: z.string().startsWith("redis", "REDIS_URL must be a redis URL"),
@@ -43,6 +46,9 @@ const envSchema = z.object({
 
   // Lets clients submit `failTimes` to force failures. Never enable in production.
   CHAOS_ENABLED: booleanFlag(false),
+
+  // Temporary (Phase 5 only): how long the placeholder processor takes.
+  PLACEHOLDER_PROCESSING_MS: positiveInt(3000),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

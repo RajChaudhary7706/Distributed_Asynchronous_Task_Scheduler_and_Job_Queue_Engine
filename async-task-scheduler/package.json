@@ -12,6 +12,9 @@
   "scripts": {
     "dev:api": "npm run dev -w @ats/api",
     "dev:worker": "npm run dev -w @ats/worker",
+    "dev:worker:pdf": "npm run dev:pdf -w @ats/worker",
+    "dev:worker:email": "npm run dev:email -w @ats/worker",
+    "dev:worker:video": "npm run dev:video -w @ats/worker",
     "db:generate": "npm run db:generate -w @ats/database",
     "db:migrate": "npm run db:migrate -w @ats/database --",
     "db:force-dlq": "npm run db:force-dlq -w @ats/database --",
