@@ -39,6 +39,11 @@ const envSchema = z.object({
   EMAIL_CONCURRENCY: positiveInt(10),
   VIDEO_CONCURRENCY: positiveInt(1),
 
+  // Simulated work duration per job type, in milliseconds.
+  PDF_PROCESSING_TIME: positiveInt(5000),
+  EMAIL_PROCESSING_TIME: positiveInt(3000),
+  VIDEO_PROCESSING_TIME: positiveInt(15000),
+
   // Enqueue recovery sweeper (API).
   SWEEP_INTERVAL_MS: positiveInt(10_000),
   SWEEP_GRACE_MS: positiveInt(15_000),
@@ -46,9 +51,6 @@ const envSchema = z.object({
 
   // Lets clients submit `failTimes` to force failures. Never enable in production.
   CHAOS_ENABLED: booleanFlag(false),
-
-  // Temporary (Phase 5 only): how long the placeholder processor takes.
-  PLACEHOLDER_PROCESSING_MS: positiveInt(3000),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

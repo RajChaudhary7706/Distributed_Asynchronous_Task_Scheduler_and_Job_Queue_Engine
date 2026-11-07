@@ -105,9 +105,18 @@ export function createJobHandler(options: JobHandlerOptions): JobProcessor {
     const startedAt = Date.now();
     log.info({ event: "job_processing", attempt, state: "PROCESSING" }, "job processing");
 
+    // Progress is a nicety stored in Redis. If it fails, the job must NOT fail.
+    const reportProgress = async (percent: number): Promise<void> => {
+      try {
+        await job.updateProgress(percent);
+      } catch (err) {
+        log.debug({ event: "progress_update_failed", err: String(err) }, "progress update failed (ignored)");
+      }
+    };
+
     // 2. Run the task.
     try {
-      await execute({ jobId, type, payload, attempt, log: log.child({ attempt }) });
+      await execute({ jobId, type, payload, attempt, log: log.child({ attempt }), reportProgress });
     } catch (err) {
       const message = errorMessage(err);
       log.warn(
