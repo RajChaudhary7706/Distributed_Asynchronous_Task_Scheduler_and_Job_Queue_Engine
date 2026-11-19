@@ -8,6 +8,7 @@ import { z } from "zod";
 dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 const positiveInt = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
+const nonNegativeInt = (fallback: number) => z.coerce.number().int().min(0).default(fallback);
 
 // z.coerce.boolean() treats the string "false" as true, so we parse booleans explicitly.
 const booleanFlag = (fallback: boolean) =>
@@ -43,6 +44,11 @@ const envSchema = z.object({
   PDF_PROCESSING_TIME: positiveInt(5000),
   EMAIL_PROCESSING_TIME: positiveInt(3000),
   VIDEO_PROCESSING_TIME: positiveInt(15000),
+
+  // Retry policy: exponential backoff with additive jitter.
+  RETRY_BASE_DELAY_MS: positiveInt(1000),
+  RETRY_MAX_DELAY_MS: positiveInt(300_000),
+  RETRY_JITTER_MAX_MS: nonNegativeInt(500),
 
   // Enqueue recovery sweeper (API).
   SWEEP_INTERVAL_MS: positiveInt(10_000),

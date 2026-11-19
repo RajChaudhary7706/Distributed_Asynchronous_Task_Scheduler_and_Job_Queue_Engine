@@ -7,6 +7,21 @@ export type JobProcessor = (job: Job<JobData, void>) => Promise<void>;
 export type JobWorker = Worker<JobData, void>;
 
 /**
+ * Decides how many milliseconds to wait before the next attempt.
+ * `attemptsMade` is the number of attempts that have failed so far (1 after the first failure).
+ */
+export type BackoffStrategy = (
+  attemptsMade: number,
+  type?: string,
+  err?: Error,
+  job?: { data?: unknown },
+) => number;
+
+export interface JobWorkerOptions {
+  backoffStrategy?: BackoffStrategy;
+}
+
+/**
  * Creates the BullMQ worker for one job type.
  * Queue name and concurrency come from the registry, so they are defined in exactly one place.
  *
@@ -18,6 +33,7 @@ export function createJobWorker(
   connection: IORedis,
   type: JobType,
   processor: JobProcessor,
+  options: JobWorkerOptions = {},
 ): JobWorker {
   const { queueName, concurrency } = getJobDefinition(type);
 
@@ -31,5 +47,7 @@ export function createJobWorker(
     stalledInterval: 30_000,
     // A job may stall once and be re-delivered; stalling twice fails it (guards against jobs that crash workers).
     maxStalledCount: 1,
+    // Used for jobs enqueued with backoff: { type: "custom" }.
+    settings: { backoffStrategy: options.backoffStrategy },
   });
 }

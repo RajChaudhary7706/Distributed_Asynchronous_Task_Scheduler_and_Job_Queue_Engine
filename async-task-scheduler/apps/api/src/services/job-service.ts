@@ -27,7 +27,7 @@ export interface JobServiceDeps {
 }
 
 export class JobService {
-  constructor(private readonly deps: JobServiceDeps) {}
+  constructor(private readonly deps: JobServiceDeps) { }
 
   /** Record the job durably, hand it to Redis, return immediately. Never runs the task. */
   async submit(input: { type: JobType; payload: JobPayload }): Promise<Job> {
@@ -87,7 +87,7 @@ export class JobService {
 
     try {
       const data: JobData = { jobId: job.id, type: job.type, payload: job.payload as JobPayload };
-      const result = await enqueueJob(this.deps.queues, data);
+      const result = await enqueueJob(this.deps.queues, data, { maxAttempts: job.maxAttempts });
       await markJobEnqueued(job.id);
       log.info({ event: "job_enqueued", jobId: job.id, jobType: job.type, result }, "job enqueued");
       return true;

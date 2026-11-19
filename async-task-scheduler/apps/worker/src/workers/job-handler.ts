@@ -9,13 +9,16 @@ import {
 import { UnrecoverableError, type JobProcessor } from "@ats/queue";
 import type { JobType, Logger } from "@ats/shared";
 import { getProcessor } from "../processors";
+import { PermanentError } from "../processors/error";
 
 const MAX_CLAIM_TRIES = 3;
 const MAX_PERSIST_TRIES = 3;
 const MAX_ERROR_LENGTH = 2000;
 const INTERRUPTED_MESSAGE = "previous attempt was interrupted (worker crashed or lost its lock)";
 
-type ClaimResult = { claimed: true; attempt: number } | { claimed: false; reason: string };
+type ClaimResult =
+  | { claimed: true; attempt: number; maxAttempts: number }
+  | { claimed: false; reason: string };
 
 function errorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -25,6 +28,7 @@ function errorMessage(err: unknown): string {
 /**
  * Decides whether this delivery should actually run, and if so moves the job to PROCESSING.
  * BullMQ delivers AT LEAST ONCE, so the same job can reach us twice. Postgres is the referee.
+ * A retry is just another delivery: the job arrives in state FAILED and moves FAILED -> PROCESSING.
  */
 async function claimJob(jobId: string, workerId: string, log: Logger): Promise<ClaimResult> {
   for (let attempt = 1; attempt <= MAX_CLAIM_TRIES; attempt++) {
@@ -47,7 +51,7 @@ async function claimJob(jobId: string, workerId: string, log: Logger): Promise<C
         await transitionJob(jobId, "FAILED", { workerId, error: INTERRUPTED_MESSAGE });
       }
       const job = await transitionJob(jobId, "PROCESSING", { workerId });
-      return { claimed: true, attempt: job.attemptCount };
+      return { claimed: true, attempt: job.attemptCount, maxAttempts: job.maxAttempts };
     } catch (err) {
       // Someone changed the row between our read and our write. Re-read and decide again.
       if (err instanceof StaleTransitionError || err instanceof InvalidTransitionError) {
@@ -94,16 +98,16 @@ export function createJobHandler(options: JobHandlerOptions): JobProcessor {
       throw new UnrecoverableError(`Job ${jobId} is type ${type} but arrived on the ${queueType} queue`);
     }
 
-    // 1. QUEUED -> PROCESSING, persisted BEFORE any work starts.
+    // 1. QUEUED/FAILED -> PROCESSING, persisted BEFORE any work starts.
     const claim = await claimJob(jobId, workerId, log);
     if (!claim.claimed) {
       log.info({ event: "job_skipped", reason: claim.reason }, "duplicate delivery ignored");
       return;
     }
 
-    const { attempt } = claim;
+    const { attempt, maxAttempts } = claim;
     const startedAt = Date.now();
-    log.info({ event: "job_processing", attempt, state: "PROCESSING" }, "job processing");
+    log.info({ event: "job_processing", attempt, maxAttempts, state: "PROCESSING" }, "job processing");
 
     // Progress is a nicety stored in Redis. If it fails, the job must NOT fail.
     const reportProgress = async (percent: number): Promise<void> => {
@@ -119,17 +123,47 @@ export function createJobHandler(options: JobHandlerOptions): JobProcessor {
       await execute({ jobId, type, payload, attempt, log: log.child({ attempt }), reportProgress });
     } catch (err) {
       const message = errorMessage(err);
+      const permanent = err instanceof PermanentError || err instanceof UnrecoverableError;
+      const exhausted = attempt >= maxAttempts;
+      const willRetry = !permanent && !exhausted;
+
       log.warn(
-        { event: "job_failed", attempt, state: "FAILED", error: message, durationMs: Date.now() - startedAt },
+        {
+          event: "job_failed",
+          attempt,
+          maxAttempts,
+          state: "FAILED",
+          willRetry,
+          error: message,
+          durationMs: Date.now() - startedAt,
+        },
         "job attempt failed",
       );
+
       // 3a. PROCESSING -> FAILED, with the reason. Never lets a bookkeeping error hide the real error.
       try {
         await persist("record failure", () => transitionJob(jobId, "FAILED", { workerId, error: message }), log);
       } catch (persistErr) {
         log.error({ event: "job_state_write_failed", target: "FAILED", err: String(persistErr) }, "could not record failure");
       }
-      // Re-throw so BullMQ also knows this attempt failed (Phase 7 hooks retries in here).
+
+      if (!willRetry) {
+        // Postgres is the authority on attempts. UnrecoverableError makes BullMQ stop retrying
+        // even if its own counter says there are attempts left.
+        // Phase 9 hooks the move to the DLQ right here.
+        log.error(
+          {
+            event: "job_retries_stopped",
+            attempt,
+            maxAttempts,
+            reason: permanent ? "permanent_error" : "max_attempts_reached",
+          },
+          "job will not be retried",
+        );
+        throw new UnrecoverableError(message);
+      }
+
+      // Re-throw: BullMQ now calls our backoffStrategy and parks the job in "delayed".
       throw err;
     }
 
