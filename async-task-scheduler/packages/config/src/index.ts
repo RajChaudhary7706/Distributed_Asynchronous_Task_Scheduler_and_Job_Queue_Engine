@@ -9,6 +9,8 @@ dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 const positiveInt = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
 const nonNegativeInt = (fallback: number) => z.coerce.number().int().min(0).default(fallback);
+// Total attempts = 1 first run + retries. Capped so a typo (e.g. 5000) can't mean near-endless retries.
+const maxAttempts = (fallback: number) => z.coerce.number().int().min(1).max(20).default(fallback);
 
 // z.coerce.boolean() treats the string "false" as true, so we parse booleans explicitly.
 const booleanFlag = (fallback: boolean) =>
@@ -31,9 +33,9 @@ const envSchema = z.object({
   REDIS_URL: z.string().startsWith("redis", "REDIS_URL must be a redis URL"),
 
   // Max times a job may be attempted before it goes to the DLQ.
-  PDF_MAX_ATTEMPTS: positiveInt(3),
-  EMAIL_MAX_ATTEMPTS: positiveInt(5),
-  VIDEO_MAX_ATTEMPTS: positiveInt(3),
+  PDF_MAX_ATTEMPTS: maxAttempts(3),
+  EMAIL_MAX_ATTEMPTS: maxAttempts(5),
+  VIDEO_MAX_ATTEMPTS: maxAttempts(3),
 
   // How many jobs ONE worker process runs in parallel.
   PDF_CONCURRENCY: positiveInt(2),

@@ -20,6 +20,7 @@
     "db:force-dlq": "npm run db:force-dlq -w @ats/database --",
     "db:smoke": "npm run db:smoke -w @ats/database",
     "queue:smoke": "npm run queue:smoke -w @ats/queue",
+    "retry:preview": "npm run retry:preview -w @ats/worker",
     "db:studio": "npm run db:studio -w @ats/database --",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
