@@ -1,7 +1,7 @@
 import { config } from "@ats/config";
 import { closeDatabase } from "@ats/database";
 import { closeQueues, createJobQueues, createRedisConnection } from "@ats/queue";
-import { createLogger } from "@ats/shared";
+import { JOB_TYPES, createLogger, getJobDefinition } from "@ats/shared";
 import { createApp } from "./app";
 import { EnqueueSweeper } from "./services/enqueue-sweeper";
 import { JobService } from "./services/job-service";
@@ -28,6 +28,13 @@ const app = createApp({ redis, jobService, log });
 
 const server = app.listen(config.API_PORT, () => {
   log.info({ port: config.API_PORT }, "api listening");
+  log.info(
+    {
+      event: "job_limits",
+      limits: Object.fromEntries(JOB_TYPES.map((type) => [type, getJobDefinition(type).maxAttempts])),
+    },
+    "max attempts per job type",
+  );
   sweeper.start();
 });
 

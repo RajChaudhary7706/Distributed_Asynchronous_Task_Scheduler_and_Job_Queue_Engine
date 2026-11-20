@@ -3,6 +3,7 @@ import { checkDatabase, closeDatabase } from "@ats/database";
 import { checkRedis, createRedisConnection } from "@ats/queue";
 import { JOB_TYPES, createLogger, isJobType, type JobType } from "@ats/shared";
 import { startWorkers } from "./workers/start-workers";
+import { summarizeRetryPolicy } from "./retry/policy";
 
 const log = createLogger("worker").child({ workerId: config.WORKER_ID });
 
@@ -25,6 +26,9 @@ function resolveQueues(value: string): JobType[] {
 async function main(): Promise<void> {
   const types = resolveQueues(config.WORKER_QUEUE);
   log.info({ queues: types }, "worker booting");
+  for (const type of types) {
+    log.info({ event: "retry_policy", ...summarizeRetryPolicy(type) }, "retry policy");
+  }
 
   // Workers keep the default (patient) connection: during a Redis outage they wait, not crash.
   const redis = createRedisConnection();

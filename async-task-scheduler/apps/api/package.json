@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "attempts:verify": "tsx src/scripts/verify-attempts.ts"
   },
   "dependencies": {
     "@ats/config": "*",
