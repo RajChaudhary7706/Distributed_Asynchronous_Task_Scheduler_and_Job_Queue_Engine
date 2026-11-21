@@ -21,6 +21,7 @@
     "db:smoke": "npm run db:smoke -w @ats/database",
     "queue:smoke": "npm run queue:smoke -w @ats/queue",
     "retry:preview": "npm run retry:preview -w @ats/worker",
+    "attempts:verify": "npm run attempts:verify -w @ats/api",
     "db:studio": "npm run db:studio -w @ats/database --",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
