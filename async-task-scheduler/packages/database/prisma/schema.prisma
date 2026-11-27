@@ -33,13 +33,15 @@ model Job {
   // Only state transitions may change it. Metadata writes use raw SQL (markJobEnqueued).
   updatedAt    DateTime  @updatedAt
   // NULL until the job has been handed to Redis. The sweeper retries rows where it is still NULL.
-  enqueuedAt   DateTime?
-  startedAt    DateTime?
-  completedAt  DateTime?
-  failedAt     DateTime?
-  error        String?
-
-  events       JobEvent[]
+  enqueuedAt     DateTime?
+  // NULL until the dead-letter evidence has been written to the Redis `dlq` queue.
+  // Only meaningful while state = DLQ. The DLQ sweeper retries rows where it is still NULL.
+  dlqPublishedAt DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  failedAt       DateTime?
+  error          String?
+  events         JobEvent[]
 
   // "list jobs in state X, newest first" (dashboards, listings)
   @@index([state, createdAt])
@@ -47,6 +49,8 @@ model Job {
   @@index([type, createdAt])
   // "find QUEUED jobs that never reached Redis" (the sweeper)
   @@index([state, enqueuedAt])
+  // "find DLQ jobs whose evidence never reached the dlq queue" (the DLQ sweeper)
+  @@index([state, dlqPublishedAt])
   @@map("jobs")
 }
 

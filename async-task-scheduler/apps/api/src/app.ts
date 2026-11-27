@@ -7,6 +7,8 @@ import { requestLogger } from "./middleware/request-logger";
 import { createHealthRouter } from "./routes/health";
 import { createJobRoutes } from "./routes/job-routes";
 import type { JobService } from "./services/job-service";
+import { createDlqController } from "./controllers/dlq-controller";
+import { createDlqRoutes } from "./routes/dlq-routes";
 
 export interface AppDeps {
   redis: ReturnType<typeof createRedisConnection>;
@@ -25,6 +27,8 @@ export function createApp(deps: AppDeps): Express {
 
   app.use(createHealthRouter(deps.redis, deps.log));
   app.use("/jobs", createJobRoutes(createJobController(deps.jobService)));
+
+  app.use("/dlq", createDlqRoutes(createDlqController(deps.jobService)));
 
   // These two MUST be last.
   app.use(notFoundHandler);

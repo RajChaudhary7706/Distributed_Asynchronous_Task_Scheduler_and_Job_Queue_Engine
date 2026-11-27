@@ -6,6 +6,7 @@ import {
   listJobs,
   markJobEnqueued,
   transitionJob,
+  getFirstFailedAtByJob,
   type Job,
   type JobPage,
   type ListJobsInput,
@@ -51,6 +52,27 @@ export class JobService {
 
   list(input: ListJobsInput): Promise<JobPage> {
     return listJobs(input);
+  }
+
+  /** Dead-lettered jobs with their evidence. Postgres is the source; the Redis dlq queue is only a view. */
+  async listDeadLetters(input: { type?: string; limit: number; cursor?: string }) {
+    const page = await listJobs({ state: "DLQ", ...input });
+    const firstFailed = await getFirstFailedAtByJob(page.items.map((job) => job.id));
+
+    return {
+      items: page.items.map((job) => ({
+        jobId: job.id,
+        type: job.type,
+        payload: job.payload,
+        attemptCount: job.attemptCount,
+        maxAttempts: job.maxAttempts,
+        error: job.error,
+        firstFailedAt: firstFailed.get(job.id) ?? job.failedAt,
+        lastFailedAt: job.failedAt,
+        deadLetteredAt: job.updatedAt,
+      })),
+      nextCursor: page.nextCursor,
+    };
   }
 
   /** Manual retry. Only DLQ jobs may come back (the state machine enforces it). */

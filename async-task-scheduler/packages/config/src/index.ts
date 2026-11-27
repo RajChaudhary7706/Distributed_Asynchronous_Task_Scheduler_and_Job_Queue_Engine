@@ -57,6 +57,11 @@ const envSchema = z.object({
   SWEEP_GRACE_MS: positiveInt(15_000),
   SWEEP_BATCH_SIZE: positiveInt(100),
 
+  // DLQ repair sweeper (worker): finds exhausted-but-not-dead-lettered jobs and unpublished DLQ rows.
+  DLQ_SWEEP_INTERVAL_MS: positiveInt(30_000),
+  DLQ_SWEEP_GRACE_MS: positiveInt(30_000),
+  DLQ_SWEEP_BATCH_SIZE: positiveInt(50),
+
   // Lets clients submit `failTimes` to force failures. Never enable in production.
   CHAOS_ENABLED: booleanFlag(false),
 });

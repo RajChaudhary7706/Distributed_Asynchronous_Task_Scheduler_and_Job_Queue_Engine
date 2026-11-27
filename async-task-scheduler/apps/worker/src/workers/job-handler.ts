@@ -8,6 +8,7 @@ import {
 } from "@ats/database";
 import { UnrecoverableError, type JobProcessor } from "@ats/queue";
 import type { JobType, Logger } from "@ats/shared";
+import type { DeadLetterService } from "../dlq/dead-letter";
 import { getProcessor } from "../processors";
 import { PermanentError } from "../processors/error";
 
@@ -30,7 +31,12 @@ function errorMessage(err: unknown): string {
  * BullMQ delivers AT LEAST ONCE, so the same job can reach us twice. Postgres is the referee.
  * A retry is just another delivery: the job arrives in state FAILED and moves FAILED -> PROCESSING.
  */
-async function claimJob(jobId: string, workerId: string, log: Logger): Promise<ClaimResult> {
+async function claimJob(
+  jobId: string,
+  workerId: string,
+  log: Logger,
+  deadLetter: DeadLetterService,
+): Promise<ClaimResult> {
   for (let attempt = 1; attempt <= MAX_CLAIM_TRIES; attempt++) {
     const current = await getJobById(jobId);
     if (!current) {
@@ -50,6 +56,18 @@ async function claimJob(jobId: string, workerId: string, log: Logger): Promise<C
         log.warn({ event: "job_recovered", state: current.state }, "recovering interrupted job");
         await transitionJob(jobId, "FAILED", { workerId, error: INTERRUPTED_MESSAGE });
       }
+
+      // A crash can consume the LAST attempt (the interrupted run counts). Never start attempt N+1:
+      // send the job to the DLQ instead of running it again.
+      if (current.attemptCount >= current.maxAttempts) {
+        log.warn(
+          { event: "job_exhausted_on_delivery", attempt: current.attemptCount, maxAttempts: current.maxAttempts },
+          "attempts already used up, dead-lettering instead of running",
+        );
+        await deadLetter.deadLetter(jobId, workerId);
+        return { claimed: false, reason: "attempts exhausted" };
+      }
+
       const job = await transitionJob(jobId, "PROCESSING", { workerId });
       return { claimed: true, attempt: job.attemptCount, maxAttempts: job.maxAttempts };
     } catch (err) {
@@ -83,11 +101,12 @@ export interface JobHandlerOptions {
   type: JobType;
   workerId: string;
   log: Logger;
+  deadLetter: DeadLetterService;
 }
 
 /** Builds the function BullMQ calls for each job. This is the heart of the worker. */
 export function createJobHandler(options: JobHandlerOptions): JobProcessor {
-  const { type: queueType, workerId } = options;
+  const { type: queueType, workerId, deadLetter } = options;
   const execute = getProcessor(queueType);
 
   return async (job) => {
@@ -99,9 +118,9 @@ export function createJobHandler(options: JobHandlerOptions): JobProcessor {
     }
 
     // 1. QUEUED/FAILED -> PROCESSING, persisted BEFORE any work starts.
-    const claim = await claimJob(jobId, workerId, log);
+    const claim = await claimJob(jobId, workerId, log, deadLetter);
     if (!claim.claimed) {
-      log.info({ event: "job_skipped", reason: claim.reason }, "duplicate delivery ignored");
+      log.info({ event: "job_skipped", reason: claim.reason }, "delivery not executed");
       return;
     }
 
@@ -148,9 +167,6 @@ export function createJobHandler(options: JobHandlerOptions): JobProcessor {
       }
 
       if (!willRetry) {
-        // Postgres is the authority on attempts. UnrecoverableError makes BullMQ stop retrying
-        // even if its own counter says there are attempts left.
-        // Phase 9 hooks the move to the DLQ right here.
         log.error(
           {
             event: "job_retries_stopped",
@@ -160,6 +176,19 @@ export function createJobHandler(options: JobHandlerOptions): JobProcessor {
           },
           "job will not be retried",
         );
+
+        // 3b. FAILED -> DLQ, plus the evidence entry. If this fails (Postgres/Redis blip) the job
+        // is NOT lost: it stays FAILED/DLQ-unpublished and the DLQ sweeper finishes the job.
+        try {
+          await deadLetter.deadLetter(jobId, workerId);
+        } catch (dlqErr) {
+          log.error(
+            { event: "job_dead_letter_failed", err: String(dlqErr) },
+            "dead-lettering failed; the DLQ sweeper will repair it",
+          );
+        }
+
+        // UnrecoverableError makes BullMQ stop retrying even if its own counter says there are attempts left.
         throw new UnrecoverableError(message);
       }
 
@@ -167,7 +196,7 @@ export function createJobHandler(options: JobHandlerOptions): JobProcessor {
       throw err;
     }
 
-    // 3b. PROCESSING -> COMPLETED.
+    // 3c. PROCESSING -> COMPLETED.
     await persist("record completion", () => transitionJob(jobId, "COMPLETED", { workerId }), log);
     log.info(
       { event: "job_completed", attempt, state: "COMPLETED", durationMs: Date.now() - startedAt },

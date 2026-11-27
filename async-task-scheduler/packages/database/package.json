@@ -11,8 +11,7 @@
     "db:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
     "db:status": "dotenv -e ../../.env -- prisma migrate status",
     "db:studio": "dotenv -e ../../.env -- prisma studio",
-    "db:smoke": "tsx src/scripts/smoke.ts",
-    "db:force-dlq": "tsx src/scripts/force-dlq.ts"
+    "db:smoke": "tsx src/scripts/smoke.ts"
   },
   "dependencies": {
     "@ats/config": "*",

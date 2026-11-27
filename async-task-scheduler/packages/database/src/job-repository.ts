@@ -200,10 +200,67 @@ function buildTransition(
           failedAt: null,
           completedAt: null,
           enqueuedAt: null,
+          dlqPublishedAt: null,
         },
         attempt: 0,
       };
     default:
       throw new Error(`Unhandled target state: ${String(to)}`);
   }
+}
+
+/**
+ * When did each job FIRST fail? Read from the audit trail (job_events), one query for many jobs.
+ * Jobs with no FAILED event are absent from the map.
+ */
+export async function getFirstFailedAtByJob(jobIds: string[]): Promise<Map<string, Date>> {
+  if (jobIds.length === 0) return new Map();
+  const rows = await prisma.jobEvent.groupBy({
+    by: ["jobId"],
+    where: { jobId: { in: jobIds }, toState: "FAILED" },
+    _min: { createdAt: true },
+  });
+  const result = new Map<string, Date>();
+  for (const row of rows) {
+    if (row._min.createdAt) result.set(row.jobId, row._min.createdAt);
+  }
+  return result;
+}
+
+/**
+ * Records that the dead-letter evidence is in Redis. Raw SQL for the same reason as
+ * markJobEnqueued: Prisma would bump `updatedAt`, our optimistic-lock version.
+ */
+export async function markDlqPublished(jobId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "jobs"
+    SET "dlqPublishedAt" = (NOW() AT TIME ZONE 'UTC')
+    WHERE "id" = ${jobId} AND "state" = 'DLQ'
+  `;
+}
+
+/** DLQ rows whose evidence never reached the `dlq` queue (crash or Redis outage between the writes). */
+export async function findUnpublishedDeadLetters(olderThan: Date, limit: number): Promise<Job[]> {
+  return prisma.job.findMany({
+    where: { state: "DLQ", dlqPublishedAt: null, updatedAt: { lt: olderThan } },
+    orderBy: { updatedAt: "asc" },
+    take: limit,
+  });
+}
+
+/**
+ * Jobs that used up all their attempts but are still FAILED (the DLQ write was lost).
+ * Compares two columns of the same row, which Prisma's `where` cannot express, hence raw SQL.
+ * The age check on failedAt keeps us away from a handler that is still mid-way through dead-lettering.
+ */
+export async function findExhaustedFailedJobs(olderThan: Date, limit: number): Promise<string[]> {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "jobs"
+    WHERE "state" = 'FAILED'
+      AND "attemptCount" >= "maxAttempts"
+      AND "failedAt" < ${olderThan}
+    ORDER BY "failedAt" ASC
+    LIMIT ${limit}
+  `;
+  return rows.map((row) => row.id);
 }

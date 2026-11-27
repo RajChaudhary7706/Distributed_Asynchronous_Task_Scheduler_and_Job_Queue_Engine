@@ -1,9 +1,11 @@
 import { config } from "@ats/config";
 import { checkDatabase, closeDatabase } from "@ats/database";
-import { checkRedis, createRedisConnection } from "@ats/queue";
+import { checkRedis, closeQueues, createDlqQueue, createRedisConnection } from "@ats/queue";
 import { JOB_TYPES, createLogger, isJobType, type JobType } from "@ats/shared";
-import { startWorkers } from "./workers/start-workers";
+import { createDeadLetterService } from "./dlq/dead-letter";
+import { DlqSweeper } from "./dlq/dlq-sweeper";
 import { summarizeRetryPolicy } from "./retry/policy";
+import { startWorkers } from "./workers/start-workers";
 
 const log = createLogger("worker").child({ workerId: config.WORKER_ID });
 
@@ -36,8 +38,23 @@ async function main(): Promise<void> {
   const [postgresUp, redisUp] = await Promise.all([checkDatabase(), checkRedis(redis)]);
   log.info({ postgresUp, redisUp }, "dependencies reachable");
 
-  const workers = startWorkers(types, redis, log, config.WORKER_ID);
+  // The dlq queue is only ever WRITTEN here. No Worker is attached to it, on purpose.
+  const dlq = createDlqQueue(redis);
+  const deadLetter = createDeadLetterService(dlq, log.child({ component: "dead-letter" }));
+  const dlqSweeper = new DlqSweeper(
+    deadLetter,
+    {
+      intervalMs: config.DLQ_SWEEP_INTERVAL_MS,
+      graceMs: config.DLQ_SWEEP_GRACE_MS,
+      batchSize: config.DLQ_SWEEP_BATCH_SIZE,
+      workerId: config.WORKER_ID,
+    },
+    log.child({ component: "dlq-sweeper" }),
+  );
+
+  const workers = startWorkers(types, redis, log, config.WORKER_ID, deadLetter);
   await Promise.all(workers.map((worker) => worker.waitUntilReady()));
+  dlqSweeper.start();
   log.info({ queues: types }, "worker ready, waiting for jobs");
 
   // Basic shutdown. Phase 15 builds the full version.
@@ -48,7 +65,9 @@ async function main(): Promise<void> {
     shuttingDown = true;
     log.info({ signal }, "shutting down: finishing active jobs");
     try {
+      await dlqSweeper.stop();
       await Promise.all(workers.map((worker) => worker.close()));
+      await closeQueues(dlq);
       await redis.quit();
       await closeDatabase();
       process.exit(0);
